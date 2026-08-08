@@ -646,7 +646,26 @@ fn id3v2_text_frame_key(frame_id: &str) -> Option<ItemKey> {
 fn decode_id3v2_text_frame(data: &[u8]) -> Option<String> {
     let (encoding, text_bytes) = data.split_first()?;
     let decoded = match encoding {
-        0 => text_bytes.iter().map(|byte| char::from(*byte)).collect(),
+        0 => {
+            // Many Chinese/Japanese MP3s label UTF-8, GBK, or Shift-JIS text
+            // as encoding $00 (ISO-8859-1). Try UTF-8 first, then GBK,
+            // then Shift-JIS, before falling back to Latin-1.
+            if let Ok(s) = std::str::from_utf8(text_bytes) {
+                s.to_string()
+            } else {
+                let (gbk_s, _, _) = encoding_rs::GBK.decode(text_bytes);
+                if !gbk_s.contains('\u{FFFD}') {
+                    gbk_s.to_string()
+                } else {
+                    let (sjis_s, _, _) = encoding_rs::SHIFT_JIS.decode(text_bytes);
+                    if !sjis_s.contains('\u{FFFD}') {
+                        sjis_s.to_string()
+                    } else {
+                        text_bytes.iter().map(|byte| char::from(*byte)).collect()
+                    }
+                }
+            }
+        }
         1 => decode_utf16_with_bom(text_bytes)?,
         2 => decode_utf16_be(text_bytes)?,
         3 => std::str::from_utf8(text_bytes).ok()?.to_string(),
