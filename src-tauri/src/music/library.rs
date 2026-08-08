@@ -240,6 +240,27 @@ fn get_locked_folder_paths(conn: &rusqlite::Connection) -> Result<Vec<String>, S
 
     Ok(locked)
 }
+
+fn filter_out_locked_paths(paths: Vec<String>, conn: &rusqlite::Connection) -> Vec<String> {
+    let locked = match get_locked_folder_paths(conn) {
+        Ok(paths) => paths,
+        Err(_) => return paths,
+    };
+    if locked.is_empty() {
+        return paths;
+    }
+    paths
+        .into_iter()
+        .filter(|path| {
+            !locked.iter().any(|locked_path| {
+                path == locked_path
+                    || path.starts_with(&format!("{locked_path}\\"))
+                    || path.starts_with(&format!("{locked_path}/"))
+            })
+        })
+        .collect()
+}
+
 fn load_cached_songs(conn: &rusqlite::Connection, exclude_locked: &[String]) -> Result<Vec<LibrarySong>, String> {
     let mut stmt = conn
         .prepare(
@@ -579,7 +600,8 @@ pub async fn get_library_song_paths_by_artist(
             .query_map([artist_name], |row| row.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
 
-        Ok::<Vec<String>, String>(rows.filter_map(Result::ok).collect())
+        let paths: Vec<String> = rows.filter_map(Result::ok).collect();
+        Ok::<Vec<String>, String>(filter_out_locked_paths(paths, &conn))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -615,7 +637,8 @@ pub async fn get_library_song_paths_by_album(
             .query_map([album_key], |row| row.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
 
-        Ok::<Vec<String>, String>(rows.filter_map(Result::ok).collect())
+        let paths: Vec<String> = rows.filter_map(Result::ok).collect();
+        Ok::<Vec<String>, String>(filter_out_locked_paths(paths, &conn))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -743,7 +766,8 @@ pub async fn get_library_song_paths_for_all_view(
             .query_map(rusqlite::params_from_iter(params.iter()), |row| row.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
 
-        Ok::<Vec<String>, String>(rows.filter_map(Result::ok).collect())
+        let paths: Vec<String> = rows.filter_map(Result::ok).collect();
+        Ok::<Vec<String>, String>(filter_out_locked_paths(paths, &conn))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -880,7 +904,8 @@ pub async fn get_library_song_paths_for_folder_view(
             }
         });
 
-        Ok::<Vec<String>, String>(song_rows.into_iter().map(|row| row.path).collect())
+        let paths: Vec<String> = song_rows.into_iter().map(|row| row.path).collect();
+        Ok::<Vec<String>, String>(filter_out_locked_paths(paths, &conn))
     })
     .await
     .map_err(|e| e.to_string())??;

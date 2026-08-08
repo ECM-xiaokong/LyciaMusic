@@ -522,7 +522,10 @@ pub(super) fn collect_scan_diff(
 
     // Only mark remaining DB songs for deletion if the folder is accessible.
     // When folder is inaccessible (e.g. BitLocker locked), preserve songs in DB.
-    if has_disk_songs {
+    let folder_is_accessible = std::path::Path::new(normalized_folder)
+        .is_dir()
+        && std::fs::read_dir(normalized_folder).is_ok();
+    if folder_is_accessible {
         to_delete.extend(db_snapshot.keys().cloned());
     }
 
