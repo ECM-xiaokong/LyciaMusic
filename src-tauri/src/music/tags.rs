@@ -643,6 +643,34 @@ fn id3v2_text_frame_key(frame_id: &str) -> Option<ItemKey> {
     }
 }
 
+
+/// Try to fix text that was incorrectly decoded as Latin-1/ISO-8859-1
+/// but was actually encoded as UTF-8, GBK, or Shift-JIS.
+/// Converts Latin-1 chars back to bytes and tries different decodings.
+fn decode_garbled_latin1(text_bytes: &[u8]) -> Option<String> {
+    // Try UTF-8 first (most common mislabeled encoding)
+    if let Ok(s) = std::str::from_utf8(text_bytes) {
+        if s.chars().any(|c| c as u32 > 0x7F) {
+            return Some(s.to_string());
+        }
+    }
+
+    // Try GBK (common for Chinese files)
+    // encoding_rs::decode returns (String, &str, bool) where bool is malformed flag
+    let (gbk_s, _, gbk_malformed) = encoding_rs::GBK.decode(text_bytes);
+    if !gbk_malformed && gbk_s.chars().any(|c| c as u32 > 0x7F) {
+        return Some(gbk_s.to_string());
+    }
+
+    // Try Shift-JIS (common for Japanese files)
+    let (sjis_s, _, sjis_malformed) = encoding_rs::SHIFT_JIS.decode(text_bytes);
+    if !sjis_malformed && sjis_s.chars().any(|c| c as u32 > 0x7F) {
+        return Some(sjis_s.to_string());
+    }
+
+    None
+}
+
 fn decode_id3v2_text_frame(data: &[u8]) -> Option<String> {
     let (encoding, text_bytes) = data.split_first()?;
     let decoded = match encoding {
@@ -978,7 +1006,20 @@ fn item_text(item: &TagItem) -> Option<String> {
 
 fn clean_text(value: &str) -> Option<String> {
     let trimmed = value.trim_matches('\0').trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    if trimmed.is_empty() {
+        return None;
+    }
+    // If the text has high Latin-1 bytes (0x80-0xFF), try alternative decodings
+    // This catches garbled text from lofty\'s Latin-1 decoding of CJK tags
+    // Only try re-decoding if all chars are in Latin-1 range (U+0000-U+00FF)
+    // to avoid corrupting already-correct CJK characters
+    if trimmed.chars().all(|c| c as u32 <= 0xFF) && trimmed.bytes().any(|b| b > 0x7F) {
+        let bytes: Vec<u8> = trimmed.chars().map(|c| c as u8).collect();
+        if let Some(fixed) = decode_garbled_latin1(&bytes) {
+            return Some(fixed);
+        }
+    }
+    Some(trimmed.to_string())
 }
 
 fn looks_like_lyrics_key(raw_key: &str) -> bool {

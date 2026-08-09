@@ -3,7 +3,7 @@
 use super::scanner::ScanOptions;
 use super::scanner::{scan_folder_recursive, scan_single_directory_internal};
 use super::types::{AlbumCatalogItem, ArtistCatalogItem, FolderNode, LibraryFolder, LibrarySong};
-use super::utils::{descendant_like_patterns, normalize_path};
+use super::utils::{descendant_like_patterns, escape_like, normalize_path};
 use crate::database::DbState;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -332,7 +332,7 @@ fn load_cached_songs(conn: &rusqlite::Connection, exclude_locked: &[String]) -> 
         songs.retain(|song| {
             !exclude_locked.iter().any(|locked_path| {
                 song.path == *locked_path
-                    || song.path.starts_with(&format!("{locked_path}\""))
+                    || song.path.starts_with(&format!("{locked_path}\\"))
                     || song.path.starts_with(&format!("{locked_path}/"))
             })
         });
@@ -449,6 +449,22 @@ pub async fn get_library_songs_cached(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
         let locked = get_locked_folder_paths(&conn).unwrap_or_default();
+
+        // Delete songs from locked/inaccessible folders (e.g. BitLocker) from DB
+        // so they disappear from the list after refresh
+        for locked_path in &locked {
+            let esc = escape_like(locked_path);
+            let pattern = format!("{}%", esc);
+            let _ = conn.execute(
+                "DELETE FROM songs WHERE path LIKE ?1 ESCAPE '^'",
+                rusqlite::params![pattern],
+            );
+            let _ = conn.execute(
+                "DELETE FROM songs WHERE path = ?1",
+                rusqlite::params![locked_path],
+            );
+        }
+
         load_cached_songs(&conn, &locked)
     })
     .await
@@ -950,6 +966,21 @@ pub async fn scan_library(
 
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
         let locked = get_locked_folder_paths(&conn).unwrap_or_default();
+        // Delete songs from locked/inaccessible folders from DB (e.g. BitLocker locked drives)
+        // so they don't persist in the list after refresh.
+        for locked_path in &locked {
+            let esc = escape_like(locked_path);
+            let pattern = format!("{}%", esc);
+            let _ = conn.execute(
+                "DELETE FROM songs WHERE path LIKE ?1 ESCAPE '^'",
+                rusqlite::params![pattern],
+            );
+            let _ = conn.execute(
+                "DELETE FROM songs WHERE path = ?1",
+                rusqlite::params![locked_path],
+            );
+        }
+
         load_cached_songs(&conn, &locked)
     })
     .await

@@ -402,6 +402,12 @@ export const createPlayerPlayback = ({
       isSongLoaded.value = false;
       sessionStartTime = null;
       stopPlaybackRuntime();
+
+      // Auto skip to next song after 1 second if playback fails
+      // (e.g., file on locked BitLocker drive)
+      setTimeout(() => {
+        handleAutoNext();
+      }, 1000);
     }
   };
 
